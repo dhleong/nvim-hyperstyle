@@ -13,6 +13,8 @@ function Indexer:new()
     statements = {},      -- indexed by shorthand ("m0a")
     full_properties = {}, -- indexed by long property name ("margin")
     full_statements = {}, -- indexed by long property name ("margin: auto")
+    property_order = {},  -- preserve definition order
+    statement_order = {}, -- preserve definition order
   }
   setmetatable(indexer, Indexer)
   return indexer
@@ -41,6 +43,8 @@ function Indexer:index_full_props(defs)
     end
     update_aliases(options)
     self.full_properties[prop] = options
+    -- Track insertion order
+    table.insert(self.property_order, prop)
   end
 
   for _, stmt_def in ipairs(defs.statements) do
@@ -58,16 +62,20 @@ function Indexer:index_full_props(defs)
     end
     local key = options.property .. ": " .. options.value
     self.full_statements[key] = options
+    -- Track insertion order  
+    table.insert(self.statement_order, key)
   end
 end
 
 function Indexer:index_aliases(defs)
-  for prop, _ in pairs(self.full_properties) do
+  -- Process properties in definition order
+  for _, prop in ipairs(self.property_order) do
     local options = self.full_properties[prop]
     index_item(self.properties, options)
   end
 
-  for key, _ in pairs(self.full_statements) do
+  -- Process statements in definition order  
+  for _, key in ipairs(self.statement_order) do
     local options = self.full_statements[key]
     index_item(self.statements, options)
   end
@@ -84,6 +92,16 @@ function Indexer:remove_tags()
   end
 end
 
+-- Get the best matching property for a key
+function Indexer:get_property(key)
+  return self.properties[key]
+end
+
+-- Get the best matching statement for a key
+function Indexer:get_statement(key)
+  return self.statements[key]
+end
+
 -- Returns a generator with fuzzy matches for a given string
 local function fuzzify(str)
   local matches = {}
@@ -98,23 +116,25 @@ end
 -- Updates options['aliases'] with property defaults
 function update_aliases(options)
   local prop = options.property
+  
+  -- Insert the property itself FIRST (highest priority)
+  table.insert(options.aliases, 1, prop)
 
-
-  -- If the property has dashes, add non-dashed versions
+  -- If the property has dashes, add non-dashed versions after property name
   if string.find(prop, '-') then
     local no_dash = string.gsub(prop, '-', '')
-    options.aliases[#options.aliases + 1] = no_dash
+    table.insert(options.aliases, 2, no_dash)  -- Insert as second priority
   end
-
-  -- Insert the property itself
-  options.aliases[#options.aliases + 1] = prop
 end
 
+
 -- Takes aliases and puts them into the properties index
+-- Uses first-match-wins strategy like the Python implementation
 function index_item(properties, options)
   for _, alias in ipairs(options.aliases) do
     local fuzzy_matches = fuzzify(alias)
     for _, key in ipairs(fuzzy_matches) do
+      -- Only store if key doesn't exist (first-match-wins)
       if not properties[key] then
         properties[key] = options
       end
